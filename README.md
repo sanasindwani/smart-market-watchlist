@@ -1,10 +1,8 @@
 # Since you last looked
 
 A market watchlist that answers one question: **what changed while you were away, and does it matter?**
+Sign in with `demo@watchlist.app` / `demo1234`
 
-Live: `<your-url-here>` · Sign in with `demo@watchlist.app` / `demo1234`
-
-![briefing screenshot](docs/briefing.png)
 
 ---
 
