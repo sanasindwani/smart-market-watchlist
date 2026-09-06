@@ -1,0 +1,185 @@
+// Persistence model.
+//
+// Read the table names top to bottom and the architecture falls out of them.
+// The first block is SHARED: one row per symbol, written by the worker,
+// read by every user. The second block is PERSONAL: one row per user per
+// symbol. That split is the whole scaling story.
+//
+//   npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SHARED — written once by the worker, read by everybody
+// ─────────────────────────────────────────────────────────────────────────
+
+model Symbol {
+  symbol    String   @id
+  name      String
+  /// NIFTY is stored as a symbol like any other. That is what makes
+  /// "did the stock move or did the market move?" a cheap question.
+  isIndex   Boolean  @default(false)
+  addedAt   DateTime @default(now())
+
+  bars      Bar[]
+  events    SymbolEvent[]
+  actions   CorporateAction[]
+  quote     Quote?
+  stat      SymbolStat?
+  watchers  WatchlistItem[]
+}
+
+/// Daily OHLCV history. Backfilled 250 sessions on first sight of a symbol.
+model Bar {
+  symbol String
+  date   String // "2026-09-03", IST trading date
+  open   Float
+  high   Float
+  low    Float
+  close  Float
+  volume Float
+
+  sym    Symbol @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+
+  @@id([symbol, date])
+  @@index([symbol, date])
+}
+
+/// The latest reconciled quote. One row per symbol — we do not keep a tick
+/// history, because nothing in the product needs one.
+model Quote {
+  symbol    String   @id
+  price     Float
+  volume    Float
+  asOf      DateTime
+  /// "ok" | "stale" | "disputed" | "unconfirmed" — never hidden from the UI.
+  status    String
+  note      String?
+  sources   String[]
+  updatedAt DateTime @updatedAt
+
+  sym       Symbol   @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+}
+
+/// Recomputed nightly, not per request. This is what makes "meaningful"
+/// per-symbol instead of one global percentage.
+model SymbolStat {
+  symbol     String   @id
+  dailyVol   Float
+  idioVol    Float
+  avgVolume  Float
+  high52w    Float
+  low52w     Float
+  lastClose  Float
+  computedAt DateTime @updatedAt
+
+  sym        Symbol   @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+}
+
+model CorporateAction {
+  id     String @id @default(cuid())
+  symbol String
+  date   String
+  type   String // "split" | "dividend"
+  ratio  Float?
+  amount Float?
+
+  sym    Symbol @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+
+  @@unique([symbol, date, type])
+}
+
+/// Detected events. `dedupeKey` is uniquely indexed so a worker retry can
+/// never double-fire the same event.
+model SymbolEvent {
+  id        String   @id @default(cuid())
+  symbol    String
+  kind      String
+  at        DateTime
+  magnitude Float
+  detail    Json
+  dedupeKey String   @unique
+  createdAt DateTime @default(now())
+
+  sym       Symbol   @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+
+  @@index([symbol, at])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PERSONAL — one row per user per symbol. Cheap to read, no market calls.
+// ─────────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  items        WatchlistItem[]
+  baselines    Baseline[]
+  acks         Acknowledgement[]
+  levels       AlertLevel[]
+}
+
+model WatchlistItem {
+  userId  String
+  symbol  String
+  addedAt DateTime @default(now())
+  /// Manual sort order, so the user's list stays in the order they chose.
+  rank    Int      @default(0)
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sym     Symbol   @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+
+  @@id([userId, symbol])
+  @@index([symbol])
+}
+
+/// THE HEART OF THE PRODUCT. What this user last actually saw, and when.
+/// Server-side, so it follows them from laptop to phone and back.
+model Baseline {
+  userId     String
+  symbol     String
+  price      Float
+  seenAt     DateTime
+  /// NIFTY level at that same moment. One column, and it buys us the
+  /// difference between "this stock moved" and "everything moved".
+  indexPrice Float?
+
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, symbol])
+}
+
+/// Every event we have already shown this user. Without this, yesterday's
+/// news reappears today and the product feels broken.
+model Acknowledgement {
+  userId    String
+  dedupeKey String
+  seenAt    DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, dedupeKey])
+}
+
+/// A price level the user set themselves. Outranks anything we infer.
+model AlertLevel {
+  id        String  @id @default(cuid())
+  userId    String
+  symbol    String
+  value     Float
+  direction String // "above" | "below"
+
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol, value, direction])
+}
