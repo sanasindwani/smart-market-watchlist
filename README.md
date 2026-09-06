@@ -2,7 +2,7 @@
 
 A market watchlist that answers one question: **what changed while you were away, and does it matter?**
 
-Live Demo: https://smart-market-watchlist-skni.onrender.com/
+Live Demo: https://smart-market-watchlist-sknj.onrender.com/
 Sign in with `demo@watchlist.app` / `demo1234`
 
 
