@@ -1,6 +1,7 @@
 # Since you last looked
 
 A market watchlist that answers one question: **what changed while you were away, and does it matter?**
+
 Live Demo: https://smart-market-watchlist-skni.onrender.com
 Sign in with `demo@watchlist.app` / `demo1234`
 
